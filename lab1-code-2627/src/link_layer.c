@@ -45,33 +45,58 @@ int llOpenTx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
-    // Create string to send
-    unsigned char buf[BUF_SIZE] = {0};
+    State state = START;
+    unsigned char byte;
 
-    for (int i = 0; i < BUF_SIZE; i++)
-    {
-        buf[i] = 'a' + i % 26;
+
+    unsigned char ua_frame[5];
+    ua_frame[0] = FLAG;
+    ua_frame[1] = A_TX;
+    ua_frame[2] = C_SET;
+    ua_frame[3] = A_TX ^ C_SET;
+    ua_frame[4] = FLAG;
+
+    writeBytesSerialPort(ua_frame, 5);
+    printf("SET enviado\n");
+
+    while (state != STOP) {
+        // Read one byte from serial port.
+        if (readByteSerialPort(&byte) > 0) {
+            switch (state) {
+            case START:
+                if (byte == FLAG) state = FLAG_A;
+                break;
+            
+            case FLAG_A:
+                if (byte == A_TX) state = A_C;
+                else if (byte == FLAG) state = FLAG_A;
+                else state = START;
+                break;
+
+            case A_C:
+                if (byte == C_UA) state = C_BCC;
+                else if (byte == FLAG) state = FLAG_A;
+                else state = START;
+                break;
+
+            case C_BCC:
+                if (byte == (A_TX ^ C_UA)) state = BCC_OK;
+                else if (byte == FLAG) state = FLAG_A;
+                else state = START;
+                break;
+
+            case BCC_OK:
+                if (byte == FLAG) state = STOP;
+                else state = START;
+                break;
+            
+            case STOP:
+                break;
+            }
+        }
     }
 
-    // In non-canonical mode, '\n' does not end the writing.
-    // Test this condition by placing a '\n' in the middle of the buffer.
-    // The whole buffer must be sent even with the '\n'.
-    buf[5] = '\n';
-
-    int bytes = writeBytesSerialPort(buf, BUF_SIZE);
-    printf("%d bytes written to serial port\n", bytes);
-
-    // Wait until all bytes have been written to the serial port
-    sleep(1);
-
-    // Close serial port
-    if (closeSerialPort() < 0)
-    {
-        perror("closeSerialPort");
-        return -1;
-    }
-
-    printf("Serial port %s closed\n", llParameters.serialPort);
+    printf("UA recebida\n");
 
     return 0;
 }
