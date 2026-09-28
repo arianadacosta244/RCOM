@@ -78,12 +78,15 @@ int llOpenTx(LinkLayer llParameters)
     ua_frame[3] = A_TX ^ C_SET;
     ua_frame[4] = FLAG;
 
-    writeBytesSerialPort(ua_frame, 5);
-    printf("SET enviado\n");
+    
 
     while (state != STOP && alarmCount <= llParameters.nRetransmissions) {
         // Read one byte from serial port.
-        if (!alarmEnabled){ alarm(llParameters.timeout);}
+        if (!alarmEnabled){ 
+            writeBytesSerialPort(ua_frame, 5);
+            printf("SET enviado (tentativa %d)\n", alarmCount + 1);
+            alarm(llParameters.timeout);
+            alarmEnabled = TRUE;}
         if (readByteSerialPort(&byte) > 0) {
             switch (state) {
             case START:
@@ -117,7 +120,11 @@ int llOpenTx(LinkLayer llParameters)
                 break;
             }
         }
-        alarm(0);
+        
+    }
+    alarm(0);
+    if (state != STOP) {
+        printf("Sem resposta após %d tentativas\n", llParameters.nRetransmissions + 1);
         return -1;
     }
 
