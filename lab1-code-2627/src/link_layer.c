@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <signal.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -27,6 +28,16 @@ typedef enum {
     STOP
 } State;
 
+volatile int alarmEnabled;
+volatile int alarmCount;
+void alarmHandler(int signal)
+{
+    alarmEnabled = FALSE;
+    alarmCount++;
+
+    printf("Alarm #%d received\n", alarmCount);
+}
+
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
@@ -44,6 +55,17 @@ int llOpenTx(LinkLayer llParameters)
     }
 
     printf("Serial port %s opened\n", llParameters.serialPort);
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        return -1;
+    }
+
+    alarmEnabled = FALSE;
+    alarmCount = 0;
+
 
     State state = START;
     unsigned char byte;
@@ -59,8 +81,9 @@ int llOpenTx(LinkLayer llParameters)
     writeBytesSerialPort(ua_frame, 5);
     printf("SET enviado\n");
 
-    while (state != STOP) {
+    while (state != STOP && alarmCount <= llParameters.nRetransmissions) {
         // Read one byte from serial port.
+        if (!alarmEnabled){ alarm(llParameters.timeout);}
         if (readByteSerialPort(&byte) > 0) {
             switch (state) {
             case START:
@@ -94,6 +117,8 @@ int llOpenTx(LinkLayer llParameters)
                 break;
             }
         }
+        alarm(0);
+        return -1;
     }
 
     printf("UA recebida\n");
