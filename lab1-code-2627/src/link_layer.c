@@ -21,21 +21,68 @@
 
 typedef enum {
     START,
-    FLAG_A,
-    A_C,
-    C_BCC,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
     BCC_OK,
     STOP
 } State;
 
+////////////////////////////////////////////////
+// ALARM
+////////////////////////////////////////////////
+
 volatile int alarmEnabled;
 volatile int alarmCount;
+
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
     alarmCount++;
 
     printf("Alarm #%d received\n", alarmCount);
+}
+
+static int sendSupervisionFrame (unsigned char a, unsigned char c) {
+    unsigned char frame[5] = {FLAG, a, c, a ^ c, FLAG};
+    return writeBytesSerialPort(frame, 5);
+}
+
+State stateMachine(State state, unsigned char byte, unsigned char a, unsigned char c) {
+
+    switch (state) {
+        case START:
+            if (byte == FLAG) state = FLAG_RCV;
+            break;
+            
+        case FLAG_RCV:
+            if (byte == a) state = A_RCV;
+            else if (byte == FLAG) state = FLAG_RCV;
+            else state = START;
+            break;
+
+        case A_RCV:
+            if (byte == c) state = C_RCV;
+            else if (byte == FLAG) state = FLAG_RCV;
+            else state = START;
+            break;
+
+        case C_RCV:
+            if (byte == (a ^ c)) state = BCC_OK;
+            else if (byte == FLAG) state = FLAG_RCV;
+            else state = START;
+            break;
+
+        case BCC_OK:
+            if (byte == FLAG) state = STOP;
+            else state = START;
+            break;
+            
+        case STOP:
+            break;
+    }
+
+    return START;
 }
 
 ////////////////////////////////////////////////
@@ -55,6 +102,7 @@ int llOpenTx(LinkLayer llParameters)
     }
 
     printf("Serial port %s opened\n", llParameters.serialPort);
+
     struct sigaction act = {0};
     act.sa_handler = &alarmHandler;
     if (sigaction(SIGALRM, &act, NULL) == -1)
@@ -66,63 +114,23 @@ int llOpenTx(LinkLayer llParameters)
     alarmEnabled = FALSE;
     alarmCount = 0;
 
-
     State state = START;
     unsigned char byte;
-
-
-    unsigned char ua_frame[5];
-    ua_frame[0] = FLAG;
-    ua_frame[1] = A_TX;
-    ua_frame[2] = C_SET;
-    ua_frame[3] = A_TX ^ C_SET;
-    ua_frame[4] = FLAG;
-
-    
 
     while (state != STOP && alarmCount <= llParameters.nRetransmissions) {
         // Read one byte from serial port.
         if (!alarmEnabled){ 
-            writeBytesSerialPort(ua_frame, 5);
+            sendSupervisionFrame(A_TX, C_SET);
             printf("SET enviado (tentativa %d)\n", alarmCount + 1);
             alarm(llParameters.timeout);
-            alarmEnabled = TRUE;}
-        if (readByteSerialPort(&byte) > 0) {
-            switch (state) {
-            case START:
-                if (byte == FLAG) state = FLAG_A;
-                break;
-            
-            case FLAG_A:
-                if (byte == A_TX) state = A_C;
-                else if (byte == FLAG) state = FLAG_A;
-                else state = START;
-                break;
-
-            case A_C:
-                if (byte == C_UA) state = C_BCC;
-                else if (byte == FLAG) state = FLAG_A;
-                else state = START;
-                break;
-
-            case C_BCC:
-                if (byte == (A_TX ^ C_UA)) state = BCC_OK;
-                else if (byte == FLAG) state = FLAG_A;
-                else state = START;
-                break;
-
-            case BCC_OK:
-                if (byte == FLAG) state = STOP;
-                else state = START;
-                break;
-            
-            case STOP:
-                break;
-            }
+            alarmEnabled = TRUE;
         }
-        
+
+        if(readByteSerialPort(&byte) > 0) state = stateMachine(state, byte, A_TX, C_UA);
     }
+
     alarm(0);
+
     if (state != STOP) {
         printf("Sem resposta após %d tentativas\n", llParameters.nRetransmissions + 1);
         return -1;
@@ -145,54 +153,24 @@ int llOpenRx(LinkLayer llParameters)
         return -1;
     }
 
+    printf("Serial port %s opened\n", llParameters.serialPort);
+
     State state = START;
     unsigned char byte;
 
     while (state != STOP) {
         // Read one byte from serial port.
         if (readByteSerialPort(&byte) > 0) {
-            switch (state) {
-            case START:
-                if (byte == FLAG) state = FLAG_A;
-                break;
-            
-            case FLAG_A:
-                if (byte == A_TX) state = A_C;
-                else if (byte == FLAG) state = FLAG_A;
-                else state = START;
-                break;
-
-            case A_C:
-                if (byte == C_SET) state = C_BCC;
-                else if (byte == FLAG) state = FLAG_A;
-                else state = START;
-                break;
-
-            case C_BCC:
-                if (byte == (A_TX ^ C_SET)) state = BCC_OK;
-                else if (byte == FLAG) state = FLAG_A;
-                else state = START;
-                break;
-
-            case BCC_OK:
-                if (byte == FLAG) state = STOP;
-                else state = START;
-                break;
-            
-            case STOP:
-                break;
-            }
+            printf("byte = 0x%02X\n", byte);
+            state = stateMachine(state, byte, A_TX, C_SET);
         }
     }
 
-    unsigned char ua_frame[5];
-    ua_frame[0] = FLAG;
-    ua_frame[1] = A_TX;
-    ua_frame[2] = C_UA;
-    ua_frame[3] = A_TX ^ C_UA;
-    ua_frame[4] = FLAG;
+    printf("SET recebido\n");
 
-    writeBytesSerialPort(ua_frame, 5);
+    sendSupervisionFrame(A_TX, C_UA);
+    printf("UA recebido\n");
+    
     return 0;
     
 }
