@@ -2,15 +2,14 @@
 //
 // Link layer protocol implementation
 
+#define _POSIX_SOURCE 1
+
 #include "link_layer.h"
 #include "serial_port.h"
-
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
 
-// MISC
-#define _POSIX_SOURCE 1 // POSIX compliant source
 #define BUF_SIZE 256
 
 #define FLAG 0x7E
@@ -19,11 +18,17 @@
 #define C_SET 0x03
 #define C_UA 0x07
 
+#define C_RR0 0xAA
+#define C_RR1 0xAB
+#define C_REJ0 0x54
+#define C_REJ1 0x55
+
 typedef enum {
     START,
     FLAG_RCV,
     A_RCV,
     C_RCV,
+    DATA_RCV,
     BCC_OK,
     STOP
 } State;
@@ -48,7 +53,7 @@ static int sendSupervisionFrame (unsigned char a, unsigned char c) {
     return writeBytesSerialPort(frame, 5);
 }
 
-State stateMachine(State state, unsigned char byte, unsigned char a, unsigned char c) {
+State stateMachineSupervision(State state, unsigned char byte, unsigned char a, unsigned char c) {
 
     switch (state) {
         case START:
@@ -82,7 +87,39 @@ State stateMachine(State state, unsigned char byte, unsigned char a, unsigned ch
             break;
     }
 
-    return START;
+    return state;
+}
+
+State stateMachineInformation(State state, unsigned char byte, unsigned char *c_byte) {
+    switch (state) {
+    case START:
+        if (byte == FLAG) state = FLAG_RCV;
+        break;
+            
+    case FLAG_RCV:
+        if (byte == A_TX) state = A_RCV;
+        else if (byte == FLAG) state = FLAG_RCV;
+        else state = START;
+        break;
+    
+    case A_RCV:
+        if (byte == 0x00 || byte == 0x80) {
+            *c_byte = byte;
+            state = C_RCV;
+        } else if (byte == FLAG) state = FLAG_RCV;
+        else state = START;
+        break;
+
+    case C_RCV:
+        if (byte == (A_TX ^ *c_byte)) state = DATA_RCV;
+        else if (byte == FLAG) state = FLAG_RCV;
+        else state = START;
+        break;
+    
+    default:
+        break;
+    }
+    return state;
 }
 
 ////////////////////////////////////////////////
@@ -126,7 +163,7 @@ int llOpenTx(LinkLayer llParameters)
             alarmEnabled = TRUE;
         }
 
-        if(readByteSerialPort(&byte) > 0) state = stateMachine(state, byte, A_TX, C_UA);
+        if(readByteSerialPort(&byte) > 0) state = stateMachineSupervision(state, byte, A_TX, C_UA);
     }
 
     alarm(0);
@@ -162,7 +199,7 @@ int llOpenRx(LinkLayer llParameters)
         // Read one byte from serial port.
         if (readByteSerialPort(&byte) > 0) {
             printf("byte = 0x%02X\n", byte);
-            state = stateMachine(state, byte, A_TX, C_SET);
+            state = stateMachineSupervision(state, byte, A_TX, C_SET);
         }
     }
 
@@ -190,8 +227,55 @@ int llSend(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llReceive(unsigned char *packet)
 {
-    // TODO: Implement this function
+    int valid_frame = 0;
+    unsigned char raw_data[BUF_SIZE * 2]; 
+    unsigned char c_byte = 0;
 
+    while (!valid_frame) {
+        State state = START;
+        int raw_idx = 0;
+        unsigned char byte;
+
+        while (state != STOP) {
+            if (readByteSerialPort(&byte) > 0) {
+                if (state == DATA_RCV) {
+                    if (byte == FLAG) state = STOP;
+                    else raw_data[raw_idx++] = byte;
+                } else {
+                    state = stateMachineInformation(state, byte, &c_byte);
+                }
+            }
+        }
+        
+        int j = 0;
+
+        for (int i = 0; i < raw_idx; i++) {
+            if (raw_data[i] == 0x7D) {
+                if (raw_data[i+1] == 0x5E) packet[j] = 0x7E;
+                else if (raw_data[i+1] == 0x5D) packet[j] = 0x7D;
+                i++;
+
+            } else packet[j] = raw_data[i];
+            j++;
+        }
+
+        unsigned char calc_bcc2 = 0;
+        for (int k = 0; k < j-1; k++) {
+            calc_bcc2 ^= packet[k];
+        }
+
+        if (calc_bcc2 == packet[j-1]) {
+            if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_RR1);
+            else sendSupervisionFrame(A_TX, C_RR0);
+
+            valid_frame = 1;
+            return j- 1;
+
+        } else {
+            if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_REJ0);
+            else sendSupervisionFrame(A_TX, C_REJ1);
+        }
+    }
     return 0;
 }
 
