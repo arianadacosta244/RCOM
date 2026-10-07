@@ -40,6 +40,8 @@ typedef enum {
 volatile int alarmEnabled;
 volatile int alarmCount;
 
+static LinkLayer connectionParams;
+
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
@@ -122,6 +124,43 @@ State stateMachineInformation(State state, unsigned char byte, unsigned char *c_
     return state;
 }
 
+State stateMachineResponse(State state, unsigned char byte, unsigned char *c_byte) {
+    switch (state) {
+    case START:
+        if (byte == FLAG) state = FLAG_RCV;
+        break;
+
+    case FLAG_RCV:
+        if (byte == A_TX) state = A_RCV;
+        else if (byte == FLAG) state = FLAG_RCV;
+        else state = START;
+        break;
+
+    case A_RCV:
+        if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1) {
+            *c_byte = byte;
+            state = C_RCV;
+        } else if (byte == FLAG) state = FLAG_RCV;
+        else state = START;
+        break;
+
+    case C_RCV:
+        if (byte == (A_TX ^ *c_byte)) state = BCC_OK;
+        else if (byte == FLAG) state = FLAG_RCV;
+        else state = START;
+        break;
+
+    case BCC_OK:
+        if (byte == FLAG) state = STOP;
+        else state = START;
+        break;
+
+    default:
+        break;
+    }
+    return state;
+}
+
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
@@ -139,6 +178,8 @@ int llOpenTx(LinkLayer llParameters)
     }
 
     printf("Serial port %s opened\n", llParameters.serialPort);
+
+    connectionParams = llParameters;
 
     struct sigaction act = {0};
     act.sa_handler = &alarmHandler;
@@ -217,9 +258,78 @@ int llOpenRx(LinkLayer llParameters)
 ////////////////////////////////////////////////
 int llSend(const unsigned char *buf, int bufSize)
 {
-    // TODO: Implement this function
+    static int ns = 0;
 
-    return 0;
+    unsigned char frame[5 + 2 * (MAX_PAYLOAD_SIZE + 1)];
+    int idx = 0;
+
+    // Cabeçalho (sem stuffing)
+    unsigned char c = (ns == 0) ? 0x00 : 0x80;
+    frame[idx++] = FLAG;
+    frame[idx++] = A_TX;
+    frame[idx++] = c;
+    frame[idx++] = A_TX ^ c;
+
+    // BCC2 sobre os dados originais
+    unsigned char bcc2 = 0;
+    for (int i = 0; i < bufSize; i++) {
+        bcc2 ^= buf[i];
+    }
+
+    // Dados + BCC2 com byte stuffing
+    for (int i = 0; i <= bufSize; i++) {
+        unsigned char byte = (i < bufSize) ? buf[i] : bcc2;
+
+        if (byte == FLAG) {
+            frame[idx++] = 0x7D;
+            frame[idx++] = 0x5E;
+        } else if (byte == 0x7D) {
+            frame[idx++] = 0x7D;
+            frame[idx++] = 0x5D;
+        } else frame[idx++] = byte;
+    }
+
+    frame[idx++] = FLAG;
+
+    // Enviar e esperar por RR/REJ
+    unsigned char expectedRR = (ns == 0) ? C_RR1 : C_RR0;
+    unsigned char c_byte = 0;
+    unsigned char byte;
+    State state = START;
+
+    alarmEnabled = FALSE;
+    alarmCount = 0;
+
+    while (alarmCount <= connectionParams.nRetransmissions) {
+        if (!alarmEnabled) {
+            writeBytesSerialPort(frame, idx);
+            printf("Trama I(%d) enviada (tentativa %d)\n", ns, alarmCount + 1);
+            alarm(connectionParams.timeout);
+            alarmEnabled = TRUE;
+        }
+
+        if (readByteSerialPort(&byte) > 0) state = stateMachineResponse(state, byte, &c_byte);
+
+        if (state == STOP) {
+            state = START;
+
+            if (c_byte == expectedRR) {
+                alarm(0);
+                ns = 1 - ns;
+                return bufSize;
+            }
+
+            if (c_byte == C_REJ0 || c_byte == C_REJ1) {
+                printf("REJ recebido, a reenviar\n");
+                alarm(0);
+                alarmEnabled = FALSE;
+            }
+        }
+    }
+
+    alarm(0);
+    printf("llSend falhou após %d tentativas\n", connectionParams.nRetransmissions + 1);
+    return -1;
 }
 
 ////////////////////////////////////////////////
