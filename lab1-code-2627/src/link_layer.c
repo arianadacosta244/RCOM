@@ -337,6 +337,7 @@ int llSend(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llReceive(unsigned char *packet)
 {
+    static int expected_ns = 0;
     int valid_frame = 0;
     unsigned char raw_data[BUF_SIZE * 2]; 
     unsigned char c_byte = 0;
@@ -375,12 +376,19 @@ int llReceive(unsigned char *packet)
         }
 
         if (calc_bcc2 == packet[j-1]) {
-            if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_RR1);
-            else sendSupervisionFrame(A_TX, C_RR0);
+            int received_ns = (c_byte == 0x00) ? 0 : 1;
 
-            valid_frame = 1;
-            return j- 1;
+            if (received_ns == expected_ns) {
+                if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR1);
+                else sendSupervisionFrame(A_TX, C_RR0);
 
+                expected_ns = 1 - expected_ns;
+                valid_frame = 1;
+                return j- 1;
+            } else {
+                if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR0);
+                else sendSupervisionFrame(A_TX, C_RR1);
+            }
         } else {
             if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_REJ0);
             else sendSupervisionFrame(A_TX, C_REJ1);
