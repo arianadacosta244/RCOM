@@ -87,6 +87,9 @@ State stateMachineSupervision(State state, unsigned char byte, unsigned char a, 
             
         case STOP:
             break;
+
+        default:
+            break;
     }
 
     return state;
@@ -339,7 +342,7 @@ int llReceive(unsigned char *packet)
 {
     static int expected_ns = 0;
     int valid_frame = 0;
-    unsigned char raw_data[BUF_SIZE * 2]; 
+    unsigned char raw_data[(MAX_PAYLOAD_SIZE * 2) + 10]; 
     unsigned char c_byte = 0;
 
     while (!valid_frame) {
