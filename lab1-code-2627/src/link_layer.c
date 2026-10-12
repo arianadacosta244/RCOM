@@ -108,7 +108,7 @@ State stateMachineInformation(State state, unsigned char byte, unsigned char *c_
         break;
     
     case A_RCV:
-        if (byte == 0x00 || byte == 0x80) {
+        if (byte == 0x00 || byte == 0x80 || byte == C_SET) {
             *c_byte = byte;
             state = C_RCV;
         } else if (byte == FLAG) state = FLAG_RCV;
@@ -242,7 +242,6 @@ int llOpenRx(LinkLayer llParameters)
     while (state != STOP) {
         // Read one byte from serial port.
         if (readByteSerialPort(&byte) > 0) {
-            printf("byte = 0x%02X\n", byte);
             state = stateMachineSupervision(state, byte, A_TX, C_SET);
         }
     }
@@ -250,7 +249,7 @@ int llOpenRx(LinkLayer llParameters)
     printf("SET recebido\n");
 
     sendSupervisionFrame(A_TX, C_UA);
-    printf("UA recebido\n");
+    printf("UA enviado\n");
     
     return 0;
     
@@ -262,6 +261,8 @@ int llOpenRx(LinkLayer llParameters)
 int llSend(const unsigned char *buf, int bufSize)
 {
     static int ns = 0;
+
+    if (buf == NULL || bufSize < 0 || bufSize > MAX_PAYLOAD_SIZE) return -1;
 
     unsigned char frame[5 + 2 * (MAX_PAYLOAD_SIZE + 1)];
     int idx = 0;
@@ -363,7 +364,22 @@ int llReceive(unsigned char *packet)
                 }
             }
         }
-        
+
+        // SET repetido (o UA perdeu-se): responder outra vez com UA
+        if (c_byte == C_SET) {
+            sendSupervisionFrame(A_TX, C_UA);
+            continue;
+        }
+
+        int received_ns = (c_byte == 0x00) ? 0 : 1;
+
+        // Trama duplicada: descartar os dados e confirmar com RR, mesmo com erro no BCC2
+        if (received_ns != expected_ns) {
+            if (expected_ns == 0) sendSupervisionFrame(A_TX, C_RR0);
+            else sendSupervisionFrame(A_TX, C_RR1);
+            continue;
+        }
+
         int j = 0;
 
         for (int i = 0; i < raw_idx; i++) {
@@ -389,19 +405,12 @@ int llReceive(unsigned char *packet)
             }
 
             if (calc_bcc2 == packet[j - 1]) {
-                int received_ns = (c_byte == 0x00) ? 0 : 1;
+                if (expected_ns == 0) sendSupervisionFrame(A_TX, C_RR1);
+                else sendSupervisionFrame(A_TX, C_RR0);
 
-                if (received_ns == expected_ns) {
-                    if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR1);
-                    else sendSupervisionFrame(A_TX, C_RR0);
-
-                    expected_ns = 1 - expected_ns;
-                    valid_frame = 1;
-                    return j - 1;
-                } else {
-                    if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR0);
-                    else sendSupervisionFrame(A_TX, C_RR1);
-                }
+                expected_ns = 1 - expected_ns;
+                valid_frame = 1;
+                return j - 1;
             } else {
                 if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_REJ0);
                 else sendSupervisionFrame(A_TX, C_REJ1);
