@@ -263,20 +263,18 @@ int llSend(const unsigned char *buf, int bufSize)
     unsigned char frame[5 + 2 * (MAX_PAYLOAD_SIZE + 1)];
     int idx = 0;
 
-    // Cabeçalho (sem stuffing)
     unsigned char c = (ns == 0) ? 0x00 : 0x80;
     frame[idx++] = FLAG;
     frame[idx++] = A_TX;
     frame[idx++] = c;
     frame[idx++] = A_TX ^ c;
 
-    // BCC2 sobre os dados originais
     unsigned char bcc2 = 0;
     for (int i = 0; i < bufSize; i++) {
         bcc2 ^= buf[i];
     }
 
-    // Dados + BCC2 com byte stuffing
+
     for (int i = 0; i <= bufSize; i++) {
         unsigned char byte = (i < bufSize) ? buf[i] : bcc2;
 
@@ -291,7 +289,7 @@ int llSend(const unsigned char *buf, int bufSize)
 
     frame[idx++] = FLAG;
 
-    // Enviar e esperar por RR/REJ
+    
     unsigned char expectedRR = (ns == 0) ? C_RR1 : C_RR0;
     unsigned char c_byte = 0;
     unsigned char byte;
