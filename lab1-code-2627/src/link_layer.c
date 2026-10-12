@@ -3,6 +3,7 @@
 // Link layer protocol implementation
 
 #define _POSIX_SOURCE 1
+#define C_DISC 0x0B   
 
 #include "link_layer.h"
 #include "serial_port.h"
@@ -23,6 +24,7 @@
 #define C_REJ0 0x54
 #define C_REJ1 0x55
 
+
 typedef enum {
     START,
     FLAG_RCV,
@@ -41,11 +43,16 @@ volatile int alarmEnabled;
 volatile int alarmCount;
 
 static LinkLayer connectionParams;
+static int framesSent = 0;      // tramas I enviadas com sucesso 
+static int framesWritten = 0;   // total de tramas I escritas no cabo, incluindo repetições
+static int rejReceived = 0;     // REJ recebidos
+static int timeouts = 0;        // vezes que o alarme tocou
 
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
     alarmCount++;
+    timeouts++;
 
     printf("Alarm #%d received\n", alarmCount);
 }
@@ -305,6 +312,7 @@ int llSend(const unsigned char *buf, int bufSize)
     while (alarmCount <= connectionParams.nRetransmissions) {
         if (!alarmEnabled) {
             writeBytesSerialPort(frame, idx);
+            framesWritten++;
             printf("Trama I(%d) enviada (tentativa %d)\n", ns, alarmCount + 1);
             alarm(connectionParams.timeout);
             alarmEnabled = TRUE;
@@ -318,6 +326,7 @@ int llSend(const unsigned char *buf, int bufSize)
             if (c_byte == expectedRR) {
                 alarm(0);
                 ns = 1 - ns;
+                framesSent++;
                 return bufSize;
             }
 
@@ -325,6 +334,7 @@ int llSend(const unsigned char *buf, int bufSize)
                 printf("REJ recebido, a reenviar\n");
                 alarm(0);
                 alarmEnabled = FALSE;
+                rejReceived++;
             }
         }
     }
@@ -428,8 +438,51 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    // TODO: Implement this function
+    // 1. reset: alarmEnabled, alarmCount, state = START
+    alarmEnabled= FALSE;
+    alarmCount=0;
+    State state = START;
+    unsigned char byte;
 
+    // 2. while (state != STOP && alarmCount <= connectionParams.nRetransmissions)
+    //       se !alarmEnabled -> envia DISC, alarm(timeout), alarmEnabled = TRUE
+    //       lê byte -> stateMachineSupervision(state, byte, ???, ???)
+    while(state != STOP && alarmCount <=  connectionParams.nRetransmissions){
+        if (!alarmEnabled) {
+            sendSupervisionFrame(A_TX,C_DISC);
+            printf("DISC enviado (tentativa %d)\n", alarmCount + 1);
+            alarm(connectionParams.timeout);
+            alarmEnabled= TRUE;
+        }
+        if(readByteSerialPort(&byte)> 0){
+            state = stateMachineSupervision(state, byte, A_RX, C_DISC);
+        }
+
+    }
+    // 3. alarm(0)
+    alarm(0);
+    // 4. se state != STOP -> mensagem de erro, fecha a porta, return -1
+    if(state != STOP){
+        printf("DISC não recebido após %d tentativas\n", connectionParams.nRetransmissions + 1);
+        closeSerialPort();
+        printf("\n=== Estatísticas (Tx) ===\n");
+    printf("Tramas I enviadas:   %d\n", framesSent);
+    printf("Retransmissões:      %d\n", framesWritten - framesSent);
+    printf("REJ recebidos:       %d\n", rejReceived);
+    printf("Timeouts:            %d\n", timeouts);
+        return -1;
+    }
+    // 5. envia UA (com que A?)
+    sendSupervisionFrame(A_RX, C_UA);
+    printf("UA enviado\n");
+    sleep(1);
+    // 6. closeSerialPort(), imprime estatísticas, return 0
+    closeSerialPort();
+    printf("\n=== Estatísticas (Tx) ===\n");
+    printf("Tramas I enviadas:   %d\n", framesSent);
+    printf("Retransmissões:      %d\n", framesWritten - framesSent);
+    printf("REJ recebidos:       %d\n", rejReceived);
+    printf("Timeouts:            %d\n", timeouts);
     return 0;
 }
 
