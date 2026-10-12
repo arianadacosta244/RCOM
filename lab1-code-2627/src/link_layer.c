@@ -3,7 +3,7 @@
 // Link layer protocol implementation
 
 #define _POSIX_SOURCE 1
-#define C_DISC 0x0B   
+#define C_DISC 0x0B
 
 #include "link_layer.h"
 #include "serial_port.h"
@@ -375,7 +375,6 @@ int llReceive(unsigned char *packet)
             }
         }
 
-        // SET repetido (o UA perdeu-se): responder outra vez com UA
         if (c_byte == C_SET) {
             sendSupervisionFrame(A_TX, C_UA);
             continue;
@@ -383,7 +382,6 @@ int llReceive(unsigned char *packet)
 
         int received_ns = (c_byte == 0x00) ? 0 : 1;
 
-        // Trama duplicada: descartar os dados e confirmar com RR, mesmo com erro no BCC2
         if (received_ns != expected_ns) {
             if (expected_ns == 0) sendSupervisionFrame(A_TX, C_RR0);
             else sendSupervisionFrame(A_TX, C_RR1);
@@ -488,7 +486,26 @@ int llCloseTx()
 
 int llCloseRx()
 {
-    // TODO: Implement this function
+    State state = START;
+    unsigned char byte;
 
-    return 0;
+    while (state != STOP) {
+        if (readByteSerialPort(&byte) > 0) {
+            state = stateMachineSupervision(state, byte, A_TX, C_DISC);
+        }
+    }
+    printf("DISC recebido do Transmitter\n");
+
+    sendSupervisionFrame(A_RX, C_DISC);
+    printf("DISC enviado ao Transmitter\n");
+
+    state = START;
+    while (state != STOP) {
+        if (readByteSerialPort(&byte) > 0) {
+            state = stateMachineSupervision(state, byte, A_RX, C_UA);
+        }
+    }
+    printf("UA final recebido do Transmitter\n");
+
+    return closeSerialPort();
 }
