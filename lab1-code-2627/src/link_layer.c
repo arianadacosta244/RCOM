@@ -353,8 +353,13 @@ int llReceive(unsigned char *packet)
         while (state != STOP) {
             if (readByteSerialPort(&byte) > 0) {
                 if (state == DATA_RCV) {
-                    if (byte == FLAG) state = STOP;
-                    else raw_data[raw_idx++] = byte;
+                    if (byte == FLAG) state = STOP; 
+                    else if (raw_idx < ((MAX_PAYLOAD_SIZE * 2) + 10)) {
+                        raw_data[raw_idx++] = byte;
+                    } else {
+                        state = START;
+                        raw_idx = 0;
+                    }
                 } else {
                     state = stateMachineInformation(state, byte, &c_byte);
                 }
@@ -365,32 +370,43 @@ int llReceive(unsigned char *packet)
 
         for (int i = 0; i < raw_idx; i++) {
             if (raw_data[i] == 0x7D) {
-                if (raw_data[i+1] == 0x5E) packet[j] = 0x7E;
-                else if (raw_data[i+1] == 0x5D) packet[j] = 0x7D;
-                i++;
-
-            } else packet[j] = raw_data[i];
+                if (i < raw_idx - 1) {
+                    if (raw_data[i+1] == 0x5E) packet[j] = 0x7E;
+                    else if (raw_data[i+1] == 0x5D) packet[j] = 0x7D;
+                    else packet[j] = raw_data[i+1]; 
+                    i++; 
+                } else {
+                    packet[j] = raw_data[i];
+                }
+            } else {
+                packet[j] = raw_data[i];
+            }
             j++;
         }
 
-        unsigned char calc_bcc2 = 0;
-        for (int k = 0; k < j-1; k++) {
-            calc_bcc2 ^= packet[k];
-        }
+        if (j > 0) {
+            unsigned char calc_bcc2 = 0;
+            for (int k = 0; k < j - 1; k++) {
+                calc_bcc2 ^= packet[k];
+            }
 
-        if (calc_bcc2 == packet[j-1]) {
-            int received_ns = (c_byte == 0x00) ? 0 : 1;
+            if (calc_bcc2 == packet[j - 1]) {
+                int received_ns = (c_byte == 0x00) ? 0 : 1;
 
-            if (received_ns == expected_ns) {
-                if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR1);
-                else sendSupervisionFrame(A_TX, C_RR0);
+                if (received_ns == expected_ns) {
+                    if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR1);
+                    else sendSupervisionFrame(A_TX, C_RR0);
 
-                expected_ns = 1 - expected_ns;
-                valid_frame = 1;
-                return j- 1;
+                    expected_ns = 1 - expected_ns;
+                    valid_frame = 1;
+                    return j - 1;
+                } else {
+                    if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR0);
+                    else sendSupervisionFrame(A_TX, C_RR1);
+                }
             } else {
-                if (expected_ns == 0x00) sendSupervisionFrame(A_TX, C_RR0);
-                else sendSupervisionFrame(A_TX, C_RR1);
+                if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_REJ0);
+                else sendSupervisionFrame(A_TX, C_REJ1);
             }
         } else {
             if (c_byte == 0x00) sendSupervisionFrame(A_TX, C_REJ0);
