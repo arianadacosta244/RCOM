@@ -28,7 +28,72 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
     if (strcmp(role, "tx") == 0)
     {
-        llOpenTx(llParameters);
+        if (llOpenTx(llParameters) < 0) {
+            printf ("Erro ao abrir a ligação\n");
+            return;
+        }
+        FILE *file = fopen(filename, "rb");
+        if (file == NULL){
+            printf("Erro ao abrir o ficheiro\n");
+            llCloseTx();
+            return;
+        }
+        fseek(file, 0, SEEK_END);
+        long fileSize = ftell(file);
+        fseek(file, 0, SEEK_SET);
+
+        unsigned char controlPacket[MAX_PAYLOAD_SIZE];
+        int idx = 0;
+
+        controlPacket[idx++] = PACKET_START;
+        controlPacket[idx++] = 0;
+        controlPacket[idx++] = 4;
+        controlPacket[idx++]= (fileSize >> 24) & 0xFF;
+        controlPacket[idx++]=(fileSize >> 16) & 0xFF;
+        controlPacket[idx++]= (fileSize >> 8) & 0xFF;
+        controlPacket[idx++] = fileSize & 0xFF;
+
+        int nameLenght = strlen(filename);
+
+        controlPacket[idx++] = 1;
+        controlPacket[idx++] = nameLenght;
+        memcpy(&controlPacket[idx], filename, nameLenght);
+        idx += nameLenght;
+
+        if (llSend(controlPacket, idx) < 0){
+            printf("Não foi possivel enviar\n");
+            fclose(file);
+            llCloseTx();
+            return;
+        }
+        unsigned char dataPacket[MAX_PAYLOAD_SIZE];
+
+        while (1) {
+            int bytesRead = fread(&dataPacket[3], 1, MAX_PAYLOAD_SIZE - 3, file);
+            if (bytesRead == 0) break;         
+
+            dataPacket[0] = PACKET_DATA;
+            dataPacket[1] = (bytesRead >> 8) & 0xFF;          
+            dataPacket[2] = (bytesRead ) & 0xFF;   
+
+            if (llSend(dataPacket, 3 + bytesRead ) < 0) {
+                printf("Não foi possivel enviar\n");
+                fclose(file);
+                llCloseTx();
+                return;
+            }
+        }
+        controlPacket[0] = PACKET_END;
+        if (llSend(controlPacket, idx) < 0){
+            printf("Não foi possivel enviar\n");
+            fclose(file);
+            llCloseTx();
+            return;
+        }
+
+        fclose (file);
+        llCloseTx;
+
     }
     else if (strcmp(role, "rx") == 0)
     {
