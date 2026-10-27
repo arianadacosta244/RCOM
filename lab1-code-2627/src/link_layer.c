@@ -206,7 +206,6 @@ int llOpenTx(LinkLayer llParameters)
     unsigned char byte;
 
     while (state != STOP && alarmCount <= llParameters.nRetransmissions) {
-        // Read one byte from serial port.
         if (!alarmEnabled){ 
             sendSupervisionFrame(A_TX, C_SET);
             printf("SET enviado (tentativa %d)\n", alarmCount + 1);
@@ -247,7 +246,6 @@ int llOpenRx(LinkLayer llParameters)
     unsigned char byte;
 
     while (state != STOP) {
-        // Read one byte from serial port.
         if (readByteSerialPort(&byte) > 0) {
             state = stateMachineSupervision(state, byte, A_TX, C_SET);
         }
@@ -436,15 +434,11 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    // 1. reset: alarmEnabled, alarmCount, state = START
     alarmEnabled= FALSE;
     alarmCount=0;
     State state = START;
     unsigned char byte;
 
-    // 2. while (state != STOP && alarmCount <= connectionParams.nRetransmissions)
-    //       se !alarmEnabled -> envia DISC, alarm(timeout), alarmEnabled = TRUE
-    //       lê byte -> stateMachineSupervision(state, byte, ???, ???)
     while(state != STOP && alarmCount <=  connectionParams.nRetransmissions){
         if (!alarmEnabled) {
             sendSupervisionFrame(A_TX,C_DISC);
@@ -457,9 +451,9 @@ int llCloseTx()
         }
 
     }
-    // 3. alarm(0)
+
     alarm(0);
-    // 4. se state != STOP -> mensagem de erro, fecha a porta, return -1
+
     if(state != STOP){
         printf("DISC não recebido após %d tentativas\n", connectionParams.nRetransmissions + 1);
         closeSerialPort();
@@ -470,11 +464,10 @@ int llCloseTx()
     printf("Timeouts:            %d\n", timeouts);
         return -1;
     }
-    // 5. envia UA (com que A?)
+
     sendSupervisionFrame(A_RX, C_UA);
     printf("UA enviado\n");
     sleep(1);
-    // 6. closeSerialPort(), imprime estatísticas, return 0
     closeSerialPort();
     printf("\n=== Estatísticas (Tx) ===\n");
     printf("Tramas I enviadas:   %d\n", framesSent);

@@ -92,15 +92,18 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         }
 
         fclose (file);
-        llCloseTx;
+        llCloseTx();
 
     }
     else if (strcmp(role, "rx") == 0)
     {
-        llOpenRx(llParameters);
+        if (llOpenRx(llParameters) < 0) {
+            printf("Erro ao abrir a ligação\n");
+            return;
+        }
         
-        unsigned char packet[MAX_PAYLOAD_SIZE];
-        FILE *file;
+        unsigned char packet[MAX_PAYLOAD_SIZE + 1];
+        FILE *file = NULL;
 
         int transfer_active = 1;
         while (transfer_active) {
@@ -109,7 +112,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
             if (packet[0] == PACKET_START) {
                 int pos = 1;
-                char received_filename[256] = {0};
 
                 while (pos < bytes_read) {
                     unsigned char type = packet[pos++];
@@ -117,16 +119,15 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
                     if (type == 0) pos += length;
                     else if (type == 1) {
-                        memcpy(received_filename, &packet[pos], length);
-                        received_filename[length] = '\0';
                         pos += length;
                     }
                 }
 
-                file = fopen(received_filename, "wb");
+                file = fopen(filename, "wb");
 
                 if (file == NULL) {
                     printf("Erro ao criar o ficheiro!\n");
+                    llCloseRx();
                     return;
                 }
             } 
